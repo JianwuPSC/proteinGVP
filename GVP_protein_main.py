@@ -11,8 +11,7 @@ import pandas as pd
 import numpy as np
 
 sys.path.append('/home/wuj/data/protein_design/GVP_protein')
-from model.Dataset import GVPdataset
-from model.Dataset import Dataset_in
+from model.Dataset import GVPdataset, Dataset_in
 from model.GVP_model import RunGVP
 from model.utils import *
 
@@ -21,10 +20,17 @@ from model.utils import *
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
+cpu_num = 32 # 这里设置成你想运行的CPU个数
+os.environ ['OMP_NUM_THREADS'] = str(cpu_num)
+os.environ ['OPENBLAS_NUM_THREADS'] = str(cpu_num)
+os.environ ['MKL_NUM_THREADS'] = str(cpu_num)
+os.environ ['VECLIB_MAXIMUM_THREADS'] = str(cpu_num)
+os.environ ['NUMEXPR_NUM_THREADS'] = str(cpu_num)
+torch.set_num_threads(cpu_num)
+
 #conda activate esmfold
-#python GVP_protein_main.py --path_prefix=/home/wuj/data/protein_design/GVP_protein/params/directed_evolution_input_all_datasets --sample_names 'HSP90' --dataset_config=/home/wuj/data/protein_design/GVP_protein/params/data_config.yaml --output_dir=sample_HSP90 --epochs=100 --multi_model=False --high_order_train=False --test_names None
-#python GVP_protein_main.py --path_prefix=/home/wuj/data/protein_design/GVP_protein/params/directed_evolution_input_all_datasets --sample_names 'HSP90' 'TEM1' --dataset_config=/home/wuj/data/protein_design/GVP_protein/params/data_config.yaml --output_dir=sample_HSP90 --epochs=5 --multi_model=True --high_order_train=False --test_names=HSP90
-#python GVP_protein_main.py --path_prefix=/home/wuj/data/protein_design/GVP_protein/params/directed_evolution_input_all_datasets --sample_names 'FOS_JUN' 'AVGFP' --dataset_config=/home/wuj/data/protein_design/GVP_protein/params/data_config.yaml --output_dir=sample_HSP90 --epochs=100 --multi_model=True --high_order_train=True --test_names=TEM1
+#python GVP_protein_main.py --path_prefix /home/wuj/data/protein_design/GVP_protein/params/directed_evolution_input_all_datasets/ --sample_names 'B3VI55_LIPSTSTABLE' 'BG_STRSQ' 'PTEN' 'AMIE_acet' 'HSP90' 'KKA2_KLEPN_KAN18' 'GB1_2combo' 'YAP1_WW1' 'AVGFP' 'FOS_JUN' 'TEM1' --dataset_config=/home/wuj/data/protein_design/GVP_protein/params/data_config.yaml --output_dir=deamnase_predict --epochs=201 --multi_model=True --high_order_train=False --test_names=deaminase --mut_prefix='_single' --mut_test_prefix='_single' --n_ensembles 6 --batch_size 32
+#python GVP_protein_main.py --path_prefix /home/wuj/data/protein_design/GVP_protein/params/directed_evolution_input_all_datasets/ --sample_names 'B3VI55_LIPSTSTABLE' 'BG_STRSQ' 'PTEN' 'AMIE_acet' 'HSP90' 'KKA2_KLEPN_KAN18' 'GB1_2combo' 'YAP1_WW1' 'AVGFP' 'FOS_JUN' 'TEM1' 'deaminase' --dataset_config=/home/wuj/data/protein_design/GVP_protein/params/data_config.yaml --output_dir=deamnase_predict --epochs=201 --multi_model=True --high_order_train=True --test_names=deaminase --mut_prefix='_rescaled' --mut_test_prefix='_single_predict_rand' --n_ensembles 6 --batch_size 32
 
 def get_args_parser():
     parser = argparse.ArgumentParser('GVP-MSA-GNN pre-training', add_help=True)
@@ -34,6 +40,7 @@ def get_args_parser():
     parser.add_argument("--test_names", default=None, type=str, help="test sample namses")
     parser.add_argument("--dataset_config", required=True, type=str, help="dataset config")
     parser.add_argument("--mut_prefix", type=str, default=None, help="mutant prefix (recale)")
+    parser.add_argument("--mut_test_prefix", type=str, default=None, help="mutant prefix (recale)")
     
     parser.add_argument("--output_dir", required=True, type=str, help="ex output/model and output")
     parser.add_argument("--load_model_path", type=str, default=None, help="load model path")
@@ -42,7 +49,7 @@ def get_args_parser():
     parser.add_argument("--high_order_input", default=None, type=str, help="high_order_input signal mutant")
 
     parser.add_argument("--top_k", type=int, default=15, help="hidden size of transformer model")
-    parser.add_argument("--batch_size", type=int, default=128, help="number of batch_size")
+    parser.add_argument("--batch_size", type=int, default=32, help="number of batch_size")
     parser.add_argument("--epochs", type=int, default=100, help="number of epochs")
     
     parser.add_argument("--with_cuda", type=bool, default=True, help="training with CUDA: true, or false")
@@ -56,7 +63,8 @@ def get_args_parser():
     parser.add_argument("--n_ensembles", type=int, default=3, help="Number of models in ensemble")
 
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate of adam")
-    parser.add_argument("--num_workers", type=int, default=1, help="weight_decay of adam")
+    parser.add_argument("--num_workers", type=int, default=4, help="weight_decay of adam")
+    parser.add_argument("--thread",type=int, default=8, help="thread default 50")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="adam first beta value")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="adam first beta value")
 
@@ -64,6 +72,8 @@ def get_args_parser():
 
 
 def main (args, mode = 'train'):
+
+    torch.set_num_threads(args.thread)
 
     if mode == 'train':
 
@@ -75,24 +85,24 @@ def main (args, mode = 'train'):
         if args.high_order_train :
             print(f'signal mutant -> high order mutant {args.test_names}')
             for data_name in args.sample_names:
-                dataset = Dataset_in(args.path_prefix,data_name,args.dataset_config,'_all',folder_num=0,mode='train')
+                dataset = Dataset_in(args.path_prefix,data_name,args.dataset_config,args.mut_prefix,folder_num=0,mode='train')
                 train_dataset,val_dataset = dataset.get_graphset()
-                train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True)
+                train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True,num_workers=args.num_workers)
                 train_data_dict[data_name] = train_data_loader
-                val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False)
+                val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False,num_workers=args.num_workers)
                 val_data_dict[data_name] = val_data_loader
             # test signal mutant
             if args.test_names is not None:
-                dataset = Dataset_in(args.path_prefix,args.test_names,args.dataset_config,'_single',folder_num=0,mode='train')
-                train_dataset,val_dataset = dataset.get_graphset()
-                train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True)
-                train_data_dict[args.test_names] = train_data_loader
-                val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False)
-                val_data_dict[args.test_names] = val_data_loader
+                #dataset = Dataset_in(args.path_prefix,args.test_names,args.dataset_config,args.mut_prefix,folder_num=0,mode='train')
+                #train_dataset,val_dataset = dataset.get_graphset()
+                #train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True)
+                #train_data_dict[args.test_names] = train_data_loader
+                #val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False)
+                #val_data_dict[args.test_names] = val_data_loader
 
-                dataset = Dataset_in(args.path_prefix,args.test_names,args.dataset_config,'_muti',folder_num=0,mode='test')
+                dataset = Dataset_in(args.path_prefix,args.test_names,args.dataset_config,args.mut_test_prefix,folder_num=0,mode='test')
                 test_dataset = dataset.get_graphset()
-                test_data_loader = DataLoader(test_dataset, batch_size=args.batch_size,shuffle=False)
+                test_data_loader = DataLoader(test_dataset, batch_size=args.batch_size,shuffle=False,num_workers=args.num_workers)
                 test_data_dict[args.test_names] = test_data_loader
                 print(f'{next(iter(test_data_loader))[0].dataset_name[0:10]}  {next(iter(test_data_loader))[0].mutant[0:10]}')
 
@@ -101,23 +111,23 @@ def main (args, mode = 'train'):
                 for data_name in args.sample_names:
                     dataset = Dataset_in(args.path_prefix,data_name,args.dataset_config,args.mut_prefix,folder_num=0,mode='train')
                     train_dataset,val_dataset = dataset.get_graphset()
-                    train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True)
-                    val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False)
+                    train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True,num_workers=args.num_workers)
+                    val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False,num_workers=args.num_workers)
                     train_data_dict[data_name] = train_data_loader
                     val_data_dict[data_name] = val_data_loader
             else :
                 for data_name in list([args.sample_names]):
                     dataset = Dataset_in(args.path_prefix,data_name,args.dataset_config,args.mut_prefix,folder_num=0,mode='train')
                     train_dataset,val_dataset = dataset.get_graphset()
-                    train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True)
-                    val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False)
+                    train_data_loader = DataLoader(train_dataset, batch_size=args.batch_size,shuffle=True,num_workers=args.num_workers)
+                    val_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False,num_workers=args.num_workers)
                     train_data_dict[data_name] = train_data_loader
                     val_data_dict[data_name] = val_data_loader
 
             if args.test_names is not None:
-                dataset = Dataset_in(args.path_prefix,args.test_names,args.dataset_config,args.mut_prefix,folder_num=0,mode='test')
+                dataset = Dataset_in(args.path_prefix,args.test_names,args.dataset_config,args.mut_test_prefix,folder_num=0,mode='test')
                 test_dataset = dataset.get_graphset()
-                test_data_loader = DataLoader(test_dataset, batch_size=args.batch_size,shuffle=False)
+                test_data_loader = DataLoader(test_dataset, batch_size=args.batch_size,shuffle=False,num_workers=args.num_workers)
                 test_data_dict[args.test_names] = test_data_loader
 
 
@@ -190,12 +200,12 @@ def main (args, mode = 'train'):
                     logger.write('Epoch{},test total loss: {},  Spearman:{}\n'.format(epoch,test_losses,spearman_v_test))
                     test_best_pred_target = (test_pred,test_target,test_mutant,test_name)
 
-            val_pred_ensemble += np.array(val_best_pred_target[0])
-            val_target_ensemble += np.array(val_best_pred_target[1])
+            val_pred_ensemble = np.array(val_best_pred_target[0])
+            val_target_ensemble = np.array(val_best_pred_target[1])
 
             if args.test_names is not None:
-                test_pred_ensemble += np.array(test_best_pred_target[0])
-                test_target_ensemble += np.array(test_best_pred_target[1])
+                test_pred_ensemble = np.array(test_best_pred_target[0])
+                test_target_ensemble = np.array(test_best_pred_target[1])
             
             best_model_para = model.state_dict()
             spearman_v_val_mean = sum(spearman_v_val)/len(spearman_v_val)
@@ -224,9 +234,11 @@ def main (args, mode = 'train'):
 
     else:  #test
 
+        test_data_dict={}
+
         data_name = args.test_names
-        test_dataset = GVPdataset(args.path_prefix, data_name, args.dataset_config, args.mut_prefix,folder_num=0,mode='test')
-        test_data_loader = DataLoader(val_dataset, batch_size=args.batch_size,shuffle=False)
+        test_dataset = GVPdataset(args.path_prefix, data_name, args.dataset_config, args.mut_test_prefix,folder_num=0,mode='test')
+        test_data_loader = DataLoader(test_dataset, batch_size=args.batch_size,shuffle=False)
         test_data_dict[data_name] = test_data_loader
         dataset_load = {'test':test_data_dict}
 
@@ -237,7 +249,7 @@ def main (args, mode = 'train'):
 
         rungvp = RunGVP(
                 output_dir=os.path.join(args.output_dir,'{}'.format(args.sample_names)),
-                dataset_names=[args.sample_names],
+                dataset_names=[args.test_names],
                 device = args.device,
                 load_model_path = args.load_model_path,
                 data_category=args.data_category,
@@ -282,6 +294,8 @@ if __name__ =='__main__':
 
     #multiprocessing.set_start_method('spawn')
     mode = 'train' # train/evalu
+
+    torch.set_num_threads(args.thread) 
 
     if mode == 'train':
         print('========  Train  =============================================================')
